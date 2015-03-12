@@ -422,7 +422,7 @@ else:
             message('Skipping digital trigger repair and extracting data file...')
             tar.extractall(temp_dir, [tmpdatfl])
         else:
-            data_file_tar = tar.extractfile(corrected_data_file)
+            data_file_tar = tar.extractfile(correct_data_file)
             fix_digital_trigger(data_file_tar, processed_data_file)
 
 # Let's construct the command...
