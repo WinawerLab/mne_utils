@@ -16,7 +16,12 @@ installed and is on your path, so if you do not have python on your path, you
 will need to make sure that it is placed there in your shell initialization
 script.
 
-#### Scripts
+Additionally, you will need to install MNE on your machine. For information on
+obtaining and installing MNE, please see the 
+[Winawer Lab wiki page](https://wikis.nyu.edu/display/winawerlab/MNE+Setup)
+on this topic.
+
+#### Scripts/Path
 
 The mne_utils package includes a directory, bin, which contains all of the
 package's scripts.  To use these scripts, you should clone this repository
