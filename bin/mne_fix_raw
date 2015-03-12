@@ -344,7 +344,7 @@ temp_dir = tempfile.mkdtemp(prefix = 'mne_prep_')
 processed_data_file = ''
 
 # Before we do anything else, we want to make sure that we can run mne in the first place
-if no_mne: mne_kit2fiff = None
+if no_mne: mne_kit2fiff = 'mne_kit2fiff'
 else:      mne_kit2fiff = which('mne_kit2fiff')
 if not(no_mne) and mne_kit2fiff == None:
     warning('Could not locate mne_kit2fiff on the path!')
