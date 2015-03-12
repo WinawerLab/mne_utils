@@ -85,7 +85,7 @@ def log(msg, level='message'):
     global out_stream
     global err_stream
     msg_verbosity = verbosity_levels[level]
-    if msg_verbosity <= verbosity_level[verbosity]:
+    if msg_verbosity <= verbosity_levels[verbosity]:
         if verbosity_level_streams[level] == 'out': stream = out_stream 
         else:                                       stream = err_stream
         prefix = verbosity_level_prefix[level]
@@ -195,63 +195,94 @@ parser = argparse.ArgumentParser(description = 'Prepare MEG/EEG data from NYU\'s
 parser.add_argument('location', 
                     type = str,
                     nargs = '?',
-                    help = 'the location of the subejct\'s data (may be either a directory or a gzipped/tarball)',
+                    help = 'The location of the subejct\'s data (may be either a directory or a gzipped/tarball)',
                     default = '.')
 parser.add_argument('-d', '--data_raw',
-                    help = 'specify the name of the raw data text file (if not data_raw.txt)',
+                    help = 'Specify the name of the raw data text file (if not data_raw.txt)',
                     dest = 'data_file',
                     default = 'data_raw.txt')
 parser.add_argument('-c', '--marker_coils',
-                    help = 'specify the name of the marker coils file (if not marker_coils.elp)',
+                    help = 'Specify the name of the marker coils file (if not marker_coils.elp)',
                     dest = 'marker_coils_file',
                     default = 'marker_coils.elp')
 parser.add_argument('-r', '--marker_coregistration',
-                    help = 'specify the name of the marker coregistration file (if not marker_coregistration.hpi)',
+                    help = 'Specify the name of the marker coregistration file (if not marker_coregistration.hpi)',
                     dest = 'marker_coregistration_file',
                     default = 'marker_coregistration.hpi')
 parser.add_argument('-s', '--head_shape',
-                    help = 'specify the name of the head shape file (if not head_shape.hsp)',
+                    help = 'Specify the name of the head shape file (if not head_shape.hsp)',
                     dest = 'head_shape_file',
                     default = 'head_shape.hsp')
 parser.add_argument('-p', '--sensor_positions',
-                    help = 'specify the name of the sensor positions file (if not sensor_positions.txt)',
+                    help = 'Specify the name of the sensor positions file (if not sensor_positions.txt)',
                     dest = 'sensor_positions_file',
                     default = 'sensor_positions.txt')
 parser.add_argument('-o', '--output',
-                    help = 'specify the name of the output file (if not data_raw.fif)',
+                    help = 'Specify the name of the output file (if not data_raw.fif)',
                     dest = 'output_file',
                     default = 'data_raw.fif')
 parser.add_argument('-O', '--stdout',
-                    help = 'specify the name of a file to which messages should be printed instead of standard output',
+                    help = 'Specify the name of a file to which messages should be printed instead of standard output',
                     dest = 'out_stream_name',
                     default = '-')
 parser.add_argument('-E', '--stderr',
-                    help = 'specify the name of a file to which errors and warnings should be printed instead of standard error',
+                    help = 'Specify the name of a file to which errors and warnings should be printed instead of standard error',
                     dest = 'err_stream_name',
                     default = '-')
 parser.add_argument('-v', '--verbose',
-                    help = 'specify that all messages and debug statements should be printed',
+                    help = 'Specify that all messages and debug statements should be printed',
                     action = 'store_const',
                     dest = 'verbose',
                     const = True,
                     default = False)
 parser.add_argument('-q', '--quiet',
-                    help = 'specify that only errors and warnings should be printed (debug statements and messages are suppressed)',
+                    help = 'Specify that only errors and warnings should be printed (debug statements and messages are suppressed)',
                     action = 'store_const',
                     dest = 'quiet',
                     const = True,
                     default = False)
 parser.add_argument('-Q', '--quiet-all',
-                    help = 'specify that only errors should be printed (debug statements, messages, and warnings are suppressed)',
+                    help = 'Specify that only errors should be printed (debug statements, messages, and warnings are suppressed)',
                     action = 'store_const',
                     dest = 'quiet_all',
                     const = True,
                     default = False)
 parser.add_argument('-x', '--no-mne',
-                    help = 'only fix the digital trigger channel then print the location of the resulting file; do not call MNE or cleanup the file',
+                    help = 'Only fix the digital trigger channel then print the location of the resulting file; do not call MNE or cleanup the file',
                     action = 'store_const',
                     default = False,
                     const = True)
+# These arguments are the mne_kit2fiff arguments that we pass along
+parser.add_argument('--aligntol',
+                    help = 'Coil alignment tolerance (default = 5.0 mm); this argument is passed to mne_kit2fiff',
+                    action = 'store',
+                    default = 5)
+parser.add_argument('--sfreq',
+                    help = 'Sampling frequency (default = 1000.0 Hz); this argument is passed to mne_kit2fiff',
+                    action = 'store',
+                    default = 1000)
+parser.add_argument('--lowpass',
+                    help = 'Lowpass filter setting (default = 200.0 Hz); this argument is passed to mne_kit2fiff',
+                    action = 'store',
+                    default = 200)
+parser.add_argument('--highpass',
+                    help = 'Highpass filter setting (default = 0.0 Hz); this argument is passed to mne_kit2fiff',
+                    action = 'store',
+                    default = 0)
+parser.add_argument('--stim',
+                    help = 'A colon separated list of channel numbers (starting from 1) comprising the virtual STI 014; this argument is passed to mne_kit2fiff',
+                    action = 'store',
+                    default = None)
+parser.add_argument('--stimthresh',
+                    help = 'Threshold value used when STI 014 is composed (default = 1.0); this argument is passed to mne_kit2fiff',
+                    action = 'store',
+                    default = None)
+parser.add_argument('--add',
+                    help = 'A colon separated list of channel numbers (starting from 1) to include in addition to the standard 157 MEG channels; this argument is passed to mne_kit2fiff',
+                    action = 'store',
+                    default = None)
+
+# Run the args
 args = parser.parse_args()
 
 # Get the args themselves
@@ -277,6 +308,14 @@ if args.verbose:     verbosity = 'debug'
 elif args.quiet:     verbosity = 'warning'
 elif args.quiet_all: verbosity = 'error'
 else:                verbosity = 'message'
+# and the mne_kit2fiff args
+aligntol = args.aligntol
+sfreq = args.sfreq
+lowpass = args.lowpass
+highpass = args.highpass
+stim = args.stim
+stimthresh = args.stimthresh
+chadd = args.add
 
 # We can go ahead and make a temp directory and the cleanup handler
 temp_dir = tempfile.mkdtemp(prefix = 'mne_prep_')
@@ -341,21 +380,35 @@ else:
 # No matter what, if we get to this point, this is the corrected text data file
 processed_data_file = os.path.join(temp_dir, data_file)
 
+# Let's construct the command...
+mne_command = [mne_kit2fiff,
+               '--elp', marker_coils_file,
+               '--hpi', marker_coregistration_file, 
+               '--sns', sensor_positions_file,
+               '--hsp', head_shape_file, 
+               '--raw', processed_data_file,
+               '--out', output_file,
+               '--aligntol', aligntol,
+               '--sfreq', sfreq,
+               '--lowpass', lowpass,
+               '--highpass', highpass]
+if not(stim is None):
+    mne_command += ['--stim', stim]
+if not(stimthresh is None):
+    mne_command += ['--stimthresh', stimthresh]
+if not(chadd is None):
+    mne_command += ['--add', chadd]
+
+# Now, we run it only if we aren't instructed not to
 if no_mne:
+    # We just print out the command line
     print('Command to construct fiff file:', file=out_stream);
-    print('mne_kit2fiff --aligntol 15 --elp ' + marker_coils_file 
-          + ' --hpi ' + marker_coregistration_file + ' --sns ' + sensor_positions_file 
-          + ' --hsp ' + head_shape_file + ' --raw ' + processed_data_file 
-          + ' --out ' + output_file,
-          file=out_stream);
+    print(' '.join(mne_command), file=out_stream);
     exit(0)
 else:
     # Okay, now we want to run mne_kit2fiff on the resulting files
     message('Running mne_kit2fiff...')
-    debug('Running command: mne_kit2fiff --aligntol 15 --elp ' + marker_coils_file 
-          + ' --hpi ' + marker_coregistration_file + ' --sns ' + sensor_positions_file 
-          + ' --hsp ' + head_shape_file + ' --raw ' + processed_data_file 
-          + ' --out ' + output_file)
+    debug('Running command: ' + ' '.join(mne_command))
     # we want to consider the mne_kit2fiff output to be message level for stdout and error level 
     # for stderr; get this ready
     if verbosity_levels[verbosity] >= verbosity_levels['message']:
@@ -364,13 +417,7 @@ else:
     else:
         mne_out = None
         mne_err = err_stream
-    status = subprocess.call(
-        [mne_kit2fiff, '--aligntol', '15', '--elp', marker_coils_file,
-         '--hpi', marker_coregistration_file, '--sns', sensor_positions_file,
-         '--hsp', head_shape_file, '--raw', processed_data_file,
-         '--out', output_file],
-        stdout=mne_out,
-        stderr=mne_err);
+    status = subprocess.call(mne_command, stdout=mne_out, stderr=mne_err);
     if status == 0: message('mne_kit2fiff returned successfully!')
     else: error('mne_kit2fiff failed!')
 
