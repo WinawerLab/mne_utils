@@ -254,21 +254,21 @@ parser.add_argument('-x', '--no-mne',
                     const = True)
 # These arguments are the mne_kit2fiff arguments that we pass along
 parser.add_argument('--aligntol',
-                    help = 'Coil alignment tolerance (default = 5.0 mm); this argument is passed to mne_kit2fiff',
+                    help = 'Coil alignment tolerance (default = 15.0 mm); this argument is passed to mne_kit2fiff; note that the default value of 15 differs from the default value in mne_kit2fiff of 5',
                     action = 'store',
-                    default = 5)
+                    default = '15')
 parser.add_argument('--sfreq',
                     help = 'Sampling frequency (default = 1000.0 Hz); this argument is passed to mne_kit2fiff',
                     action = 'store',
-                    default = 1000)
+                    default = '1000')
 parser.add_argument('--lowpass',
                     help = 'Lowpass filter setting (default = 200.0 Hz); this argument is passed to mne_kit2fiff',
                     action = 'store',
-                    default = 200)
+                    default = '200')
 parser.add_argument('--highpass',
                     help = 'Highpass filter setting (default = 0.0 Hz); this argument is passed to mne_kit2fiff',
                     action = 'store',
-                    default = 0)
+                    default = '0')
 parser.add_argument('--stim',
                     help = 'A colon separated list of channel numbers (starting from 1) comprising the virtual STI 014; this argument is passed to mne_kit2fiff',
                     action = 'store',
