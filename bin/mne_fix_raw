@@ -346,7 +346,7 @@ processed_data_file = ''
 # Before we do anything else, we want to make sure that we can run mne in the first place
 if no_mne: mne_kit2fiff = None
 else:      mne_kit2fiff = which('mne_kit2fiff')
-if mne_kit2fiff == None:
+if not(no_mne) and mne_kit2fiff == None:
     warning('Could not locate mne_kit2fiff on the path!')
 
 # Next, if we have a tarball, we need to handle this differently than if we have a directory
