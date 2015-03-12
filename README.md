@@ -8,7 +8,7 @@ Utilities for running MNE in the Winawer Lab using the MEG/EEG setup at NYU.
 
 ## Installation ################################################################
 
-### Dependencies
+#### Dependencies
 
 All of the scripts included in this repository are python scripts, so python
 version 2.7.6 is all that is required. These scripts expect that python is
@@ -16,7 +16,7 @@ installed and is on your path, so if you do not have python on your path, you
 will need to make sure that it is placed there in your shell initialization
 script.
 
-### Scripts
+#### Scripts
 
 The mne_utils package includes a directory, bin, which contains all of the
 package's scripts.  To use these scripts, you should clone this repository
@@ -75,6 +75,5 @@ Further documentation is available on the
       of stdout for printing the command line.
     * -E or --stderr <file> specifies that <file> should be opened and written
       to for all warnings or errors instead of printing to stderr.
-
       
 
