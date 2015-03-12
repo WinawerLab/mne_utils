@@ -1,0 +1,361 @@
+#! /usr/bin/env python
+
+####################################################################################################
+# This program preprocesses MEG or EEG data collected from the MEG160 system at NYU for use with MNE
+# The script requires several structural things in order to work correctly:
+#  - The data for the relevant experiment and subejct must be either in a directory or a
+#    gzipped/tarballed directory, which is a command line argument
+#  - The directory must contain these files, with these names:
+#     - data_raw.txt, the raw data as a text file
+#     - marker_coils.elp
+#     - marker_coregistration.hpi
+#     - head_shape.hsp
+#     - sensor_positions.txt
+#  - For more info about running this program, see the wiki page:
+#    https://wikis.nyu.edu/display/winawerlab/Preprocessing+MEG+or+EEG+data
+# Author: Noah C. Benson <nben@nyu.edu>
+
+from __future__ import print_function
+import re
+import sys
+import argparse
+import atexit
+import os.path
+import tarfile
+import tempfile
+import shutil
+import numpy
+import subprocess
+from scipy import signal
+
+
+
+####################################################################################################
+# Finding the path of an executable (MNE)
+def which(program):
+    import os
+    def is_exe(fpath):
+        return os.path.isfile(fpath) and os.access(fpath, os.X_OK)
+    fpath, fname = os.path.split(program)
+    if fpath:
+        if is_exe(program):
+            return program
+    else:
+        for path in os.environ["PATH"].split(os.pathsep):
+            path = path.strip('"')
+            exe_file = os.path.join(path, program)
+            if is_exe(exe_file):
+                return exe_file
+    return None
+
+
+####################################################################################################
+# Printing Output: log, message, warning, error
+
+# verbosity levels...
+verbosity_levels = {'debug': 3, 'message': 2, 'warning': 1, 'error': 0}
+# output streams (where to send the output)
+verbosity_level_streams = {'debug': 'out', 'message': 'out', 'warning': 'err', 'error': 'err'}
+# Output prefixes
+verbosity_level_prefix = {'debug':   'DEBUG:  ',
+                          'message': '        ', 
+                          'warning': 'WARNING:',
+                          'error':   'ERROR:  '}
+
+# The log function, which actually handles the printing
+def log(msg, level='message'):
+    global verbosity
+    global out_stream
+    global err_stream
+    msg_verbosity = verbosity_levels[level]
+    if msg_verbosity <= verbosity_level[verbosity]:
+        if verbosity_level_streams[level] == 'out': stream = out_stream 
+        else:                                       stream = err_stream
+        prefix = verbosity_level_prefix[level]
+        print(prefix, msg, file=stream)
+
+# functions that call the log function with the appropriate error level
+def debug(*text):   log(''.join(*text), level = 'debug')
+def message(*text): log(''.join(*text), level = 'message')
+def warning(*text): log(''.join(*text), level = 'warning')
+def error(*text):   log(''.join(*text), level = 'error')
+
+# an exit handler for closing the stream
+def close_stream(stream): 
+    if not(stream is None): stream.close()
+
+
+
+####################################################################################################
+# Function: Fix the triggers!
+# This function is a matlab-to-python translation of the function meg_fix_triggers in the meg_utils
+# repository on github at https://github.com/JWinawer/meg_utils
+# The full path to the function is:
+# https://github.com/JWinawer/meg_utils/blob/master/preprocessing/meg_fix_triggers.m
+# Date: 2015-03-11
+# meg_fix_triggers.m was last updated on 2015-02-23 when this function was written.
+def fix_digital_trigger(fid, outname):
+    # Okay, the challenge here is to walk through this huge text file and fix the digital trigger
+    # channel, line by line...
+    message('Reading raw file...')
+    lines = [map(float, line.split()) for line in fid]
+    message('Fixing digital trigger channel...')
+    trigs = numpy.array([[0]*len(lines), [0]*len(lines), [0]*len(lines), [0]*len(lines)])
+    for u, i in zip(lines, range(len(lines))):
+        if len(u) != 192: raise ValueError('line in raw data file did not have 192 columsn!')
+        # the digital trigger channels for us are columns 160-163
+        trigs[0][i] = float(u[160])
+        trigs[1][i] = float(u[161])
+        trigs[2][i] = float(u[162])
+        trigs[3][i] = float(u[163])
+    # find the median, min, and max
+    tt = numpy.concatenate((trigs[0], trigs[1], trigs[2], trigs[3]))
+    md = numpy.median(tt)
+    mx = max(tt)
+    mn = min(tt)
+    # rescale to [0,1] while putting the bad values at the median
+    upper_limit = 5*md
+    trigs = numpy.array(
+        map(lambda u: map(lambda x: (md-mn)/(mx-mn) if abs(x) > upper_limit else (x-mn)/(mx-mn), u),
+            trigs))
+    # are triggers indicated by high or low values?
+    if round(numpy.mean(numpy.concatenate((trigs[0], trigs[1], trigs[2], trigs[3])))) == 0: 
+        high_trig = True
+    else:
+        high_trig = False
+        trigs = 1 - trigs
+    # Binarize with a threshold of 0.1 then calculate differences; also eliminate negatives
+    trigs = numpy.array(
+        map(lambda u: numpy.clip(
+                numpy.append(
+                    numpy.diff(
+                        map(lambda x: 1 if x > 0.1 else 0, 
+                            u)),
+                    0),
+                0, 1),
+            trigs))
+    # eliminate the triggers that are too close together...
+    indices = [i for u,i in zip((trigs[0] + trigs[1] + trigs[2] + trigs[3]), range(len(trigs[0]))) if u != 0]
+    indices_diff = numpy.append(numpy.diff(indices), 0)
+    for u,i in zip(indices_diff, indices):
+        if u < 10:
+            for j in range(len(trigs)):
+                tot = trigs[j,i-2] + trigs[j,i-1] + trigs[j,i] + trigs[j,i+1] + trigs[j,i+2]
+                trigs[j,i-2] = 0
+                trigs[j,i-1] = 0
+                trigs[j,i] = tot
+                trigs[j,i+1] = 0
+                trigs[j,i+2] = 0
+    # convert to a base-10 representation
+    dtc = trigs[0] + 2*trigs[1] + 4*trigs[2] + 8*trigs[3]
+    # Now we write out the original file, replacing just column 160 with the dtc
+    message('Outputting fixed raw file...')
+    with open(outname, 'w') as out:
+        for line, x in zip(lines, dtc):
+            line[160] = x
+            out.write('\t'.join(map(str, line)) + '\n')
+    # That's it!
+    return outname
+
+                    
+    
+####################################################################################################
+# Functions: Exit Handlers
+
+# Handler for deleting the unzipped tarball
+def delete_temp_dir(path):
+    if not(os.path.isdir(path)):
+        warning('Could not cleanup non-existant path: ' + path)
+    else:
+        shutil.rmtree(path)
+
+
+
+####################################################################################################
+# Setup the Argument Parser and Parse the Args:
+
+parser = argparse.ArgumentParser(description = 'Prepare MEG/EEG data from NYU\'s MEG160 system for processing with MNE')
+parser.add_argument('location', 
+                    type = str,
+                    nargs = '?',
+                    help = 'the location of the subejct\'s data (may be either a directory or a gzipped/tarball)',
+                    default = '.')
+parser.add_argument('-d', '--data_raw',
+                    help = 'specify the name of the raw data text file (if not data_raw.txt)',
+                    dest = 'data_file',
+                    default = 'data_raw.txt')
+parser.add_argument('-c', '--marker_coils',
+                    help = 'specify the name of the marker coils file (if not marker_coils.elp)',
+                    dest = 'marker_coils_file',
+                    default = 'marker_coils.elp')
+parser.add_argument('-r', '--marker_coregistration',
+                    help = 'specify the name of the marker coregistration file (if not marker_coregistration.hpi)',
+                    dest = 'marker_coregistration_file',
+                    default = 'marker_coregistration.hpi')
+parser.add_argument('-s', '--head_shape',
+                    help = 'specify the name of the head shape file (if not head_shape.hsp)',
+                    dest = 'head_shape_file',
+                    default = 'head_shape.hsp')
+parser.add_argument('-p', '--sensor_positions',
+                    help = 'specify the name of the sensor positions file (if not sensor_positions.txt)',
+                    dest = 'sensor_positions_file',
+                    default = 'sensor_positions.txt')
+parser.add_argument('-o', '--output',
+                    help = 'specify the name of the output file (if not data_raw.fif)',
+                    dest = 'output_file',
+                    default = 'data_raw.fif')
+parser.add_argument('-O', '--stdout',
+                    help = 'specify the name of a file to which messages should be printed instead of standard output',
+                    dest = 'out_stream_name',
+                    default = '-')
+parser.add_argument('-E', '--stderr',
+                    help = 'specify the name of a file to which errors and warnings should be printed instead of standard error',
+                    dest = 'err_stream_name',
+                    default = '-')
+parser.add_argument('-v', '--verbose',
+                    help = 'specify that all messages and debug statements should be printed',
+                    action = 'store_const',
+                    dest = 'verbose',
+                    const = True,
+                    default = False)
+parser.add_argument('-q', '--quiet',
+                    help = 'specify that only errors and warnings should be printed (debug statements and messages are suppressed)',
+                    action = 'store_const',
+                    dest = 'quiet',
+                    const = True,
+                    default = False)
+parser.add_argument('-Q', '--quiet-all',
+                    help = 'specify that only errors should be printed (debug statements, messages, and warnings are suppressed)',
+                    action = 'store_const',
+                    dest = 'quiet_all',
+                    const = True,
+                    default = False)
+parser.add_argument('-x', '--no-mne',
+                    help = 'only fix the digital trigger channel then print the location of the resulting file; do not call MNE or cleanup the file',
+                    action = 'store_const',
+                    default = False,
+                    const = True)
+args = parser.parse_args()
+
+# Get the args themselves
+location = args.location
+no_mne = args.no_mne
+data_file = args.data_file
+marker_coils_file = args.marker_coils_file
+marker_coregistration_file = args.marker_coregistration_file
+head_shape_file = args.head_shape_file
+sensor_positions_file = args.sensor_positions_file
+output_file = args.output_file
+if args.out_stream_name == '-':
+    out_stream = sys.stdout
+else:
+    out_stream = open(args.out_stream_name, 'w')
+    atexit.register(close_stream, stream = out_stream)
+if args.err_stream_name == '-':
+    err_stream = sys.stderr
+else:
+    err_stream = open(args.err_stream_name, 'w')
+    atexit.register(close_stream, stream = err_stream)
+if args.verbose:     verbosity = 'debug'
+elif args.quiet:     verbosity = 'warning'
+elif args.quiet_all: verbosity = 'error'
+else:                verbosity = 'message'
+
+# We can go ahead and make a temp directory and the cleanup handler
+temp_dir = tempfile.mkdtemp(prefix = 'mne_prep_')
+#if not(no_mne): atexit.register(delete_temp_dir, path=temp_dir)
+
+
+
+####################################################################################################
+# Sanity Checking
+
+processed_data_file = ''
+
+# Before we do anything else, we want to make sure that we can run mne in the first place
+if no_mne: mne_kit2fiff = None
+else:      mne_kit2fiff = which('mne_kit2fiff')
+if mne_kit2fiff == None:
+    warning('Could not locate mne_kit2fiff on the path!')
+
+# Next, if we have a tarball, we need to handle this differently than if we have a directory
+if os.path.isdir(location):
+    # First, make sure all the files are here... if the location is a tarball file, we need to 
+    for file in [data_file, marker_coils_file, marker_coregistration_file,
+                 head_shape_file, sensor_positions_file]:
+        if not(os.path.isfile(os.path.join(location, file))):
+            error('Cannot find required file: ' + file)
+            exit(1)
+    # That's all we need to check for now; we can go ahead and fix the digital trigger
+    with open(os.path.join(location, data_file)) as fid:
+        fix_digital_trigger(fid, os.path.join(temp_dir, data_file))
+else:
+    if re.search('(\\.tar\\.gz)|(\\.tgz)|(\\.tar\\.bz2)|(\\.tar)$', location) == None:
+        error('Location file (' + location + ') is not a tar or zipped-tar file')
+        exit(1)
+    # First, things first; we need to open this file...
+    with tarfile.open(location, "r") as tar:
+        # the file should contain exactly one directory...
+        dirs = [nm for nm in tar if nm.isdir()]
+        if len(dirs) != 1:
+            error('Tarfile must contain exactly 1 directory; contains: ' + dirs)
+            exit(1)
+        dirname = dirs[0].name
+        filenames = tar.getnames()
+        possibles = map(lambda fl: os.path.join(dirname, fl),
+                        [data_file, marker_coils_file, marker_coregistration_file,
+                         head_shape_file, sensor_positions_file])
+        misses = [nm for nm in possibles if nm not in filenames];
+        if len(misses) > 0:
+            error('tarball does not contain all files; missing: ' + ', '.join(misses))
+            exit(1)
+        # okay, we need to extract these files (but not the raw data file)
+        tmpdatfl = os.path.join(dirname, data_file)
+        tar.extractall(temp_dir, filter(lambda fl: fl.name != tmpdatfl, tar.getmembers()))
+        # we want to update the file names, since they have been unzipped to a subdirectory
+        marker_coils_file = os.path.join(temp_dir, dirname, marker_coils_file)
+        marker_coregistration_file = os.path.join(temp_dir, dirname, marker_coregistration_file)
+        head_shape_file = os.path.join(temp_dir, dirname, head_shape_file)
+        sensor_positions_file = os.path.join(temp_dir, dirname, sensor_positions_file)
+        # then we need to fix the digital trigger channel
+        data_file_tar = tar.extractfile(os.path.join(dirname, data_file))
+        fix_digital_trigger(data_file_tar, os.path.join(temp_dir, data_file))
+
+# No matter what, if we get to this point, this is the corrected text data file
+processed_data_file = os.path.join(temp_dir, data_file)
+
+if no_mne:
+    print('Command to construct fiff file:', file=out_stream);
+    print('mne_kit2fiff --aligntol 15 --elp ' + marker_coils_file 
+          + ' --hpi ' + marker_coregistration_file + ' --sns ' + sensor_positions_file 
+          + ' --hsp ' + head_shape_file + ' --raw ' + processed_data_file 
+          + ' --out ' + output_file,
+          file=out_stream);
+    exit(0)
+else:
+    # Okay, now we want to run mne_kit2fiff on the resulting files
+    message('Running mne_kit2fiff...')
+    debug('Running command: mne_kit2fiff --aligntol 15 --elp ' + marker_coils_file 
+          + ' --hpi ' + marker_coregistration_file + ' --sns ' + sensor_positions_file 
+          + ' --hsp ' + head_shape_file + ' --raw ' + processed_data_file 
+          + ' --out ' + output_file)
+    # we want to consider the mne_kit2fiff output to be message level for stdout and error level 
+    # for stderr; get this ready
+    if verbosity_levels[verbosity] >= verbosity_levels['message']:
+        mne_out = out_stream
+        mne_err = err_stream
+    else:
+        mne_out = None
+        mne_err = err_stream
+    status = subprocess.call(
+        [mne_kit2fiff, '--aligntol', '15', '--elp', marker_coils_file,
+         '--hpi', marker_coregistration_file, '--sns', sensor_positions_file,
+         '--hsp', head_shape_file, '--raw', processed_data_file,
+         '--out', output_file],
+        stdout=mne_out,
+        stderr=mne_err);
+    if status == 0: message('mne_kit2fiff returned successfully!')
+    else: error('mne_kit2fiff failed!')
+
+# That's it...
+
