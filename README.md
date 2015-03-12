@@ -80,5 +80,8 @@ Further documentation is available on the
       of stdout for printing the command line.
     * -E or --stderr <file> specifies that <file> should be opened and written
       to for all warnings or errors instead of printing to stderr.
+    * Additionally, the arguments --aligntol, --stim, --stimthresh, --sfreq, 
+      --lowpass, --highpass, and --add may be passed to mne_fix_raw and will
+      be passed verbatim along to mne_kit2fiff.
       
 
