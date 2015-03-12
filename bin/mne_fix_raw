@@ -119,7 +119,7 @@ def fix_digital_trigger(fid, outname):
     message('Fixing digital trigger channel...')
     trigs = numpy.array([[0]*len(lines), [0]*len(lines), [0]*len(lines), [0]*len(lines)])
     for u, i in zip(lines, range(len(lines))):
-        if len(u) != 192: raise ValueError('line in raw data file did not have 192 columsn!')
+        if len(u) < 163: raise ValueError('line in raw data file did not have 192 columsn!')
         # the digital trigger channels for us are columns 160-163
         trigs[0][i] = float(u[160])
         trigs[1][i] = float(u[161])
@@ -252,6 +252,18 @@ parser.add_argument('-x', '--no-mne',
                     action = 'store_const',
                     default = False,
                     const = True)
+parser.add_argument('-S', '--raw-separate',
+                    help = 'Assume that the raw data file is a separate file not included in the directory or tarball; this option is useful for instances where the raw data file was separately exported from, e.g. Matlab and is not included in the tarball or directory',
+                    action = 'store_const',
+                    dest = 'separate_raw_data',
+                    default = False,
+                    const = True)
+parser.add_argument('-w', '--without-dtc',
+                    help = 'Do not fix the digital trigger channel; note that this does not change the default action of passing channel 161 as the digital trigger channel to mne_kit2fiff; accordingly, if you use this option (e.g., if you processed your triggers in matlab), you will need to make sure that either the digital trigger channel has been placed in column 161 or that you pass the appropriate --stim argument as well',
+                    action = 'store_const',
+                    dest = 'skip_dtc',
+                    default = False,
+                    const = True)
 # These arguments are the mne_kit2fiff arguments that we pass along
 parser.add_argument('--aligntol',
                     help = 'Coil alignment tolerance (default = 15.0 mm); this argument is passed to mne_kit2fiff; note that the default value of 15 differs from the default value in mne_kit2fiff of 5',
@@ -270,9 +282,9 @@ parser.add_argument('--highpass',
                     action = 'store',
                     default = '0')
 parser.add_argument('--stim',
-                    help = 'A colon separated list of channel numbers (starting from 1) comprising the virtual STI 014; this argument is passed to mne_kit2fiff',
+                    help = 'A colon separated list of channel numbers (starting from 1) comprising the virtual STI 014; this argument is passed to mne_kit2fiff; NOTE: this argument should not be changed from default lightly; if 161 is not included in this list, the digital trigger channel is not included in the output file',
                     action = 'store',
-                    default = None)
+                    default = '161')
 parser.add_argument('--stimthresh',
                     help = 'Threshold value used when STI 014 is composed (default = 1.0); this argument is passed to mne_kit2fiff',
                     action = 'store',
@@ -308,6 +320,9 @@ if args.verbose:     verbosity = 'debug'
 elif args.quiet:     verbosity = 'warning'
 elif args.quiet_all: verbosity = 'error'
 else:                verbosity = 'message'
+separate_raw_data = args.separate_raw_data
+skip_dtc = args.skip_dtc
+
 # and the mne_kit2fiff args
 aligntol = args.aligntol
 sfreq = args.sfreq
@@ -340,11 +355,30 @@ if os.path.isdir(location):
     for file in [data_file, marker_coils_file, marker_coregistration_file,
                  head_shape_file, sensor_positions_file]:
         if not(os.path.isfile(os.path.join(location, file))):
-            error('Cannot find required file: ' + file)
-            exit(1)
+            if not(separate_raw_data) or file != data_file:
+                error('Cannot find required file: ' + file)
+                exit(1)
+    # Fix the filenames for the various files...
+    marker_coils_file = os.path.join(location, marker_coils_file)
+    marker_coregistration_file = os.path.join(location, marker_coregistration_file)
+    head_shape_file = os.path.join(location, head_shape_file)
+    sensor_positions_file = os.path.join(location, sensor_positions_file)
+    # Make sure we have the raw data file location straight
+    if separate_raw_data and not(os.path.isfile(data_file)):
+        error('Cannot find required file: ' + file)
+        exit(1)
+    elif separate_raw_data:
+        correct_data_file = data_file
+    else:
+        correct_data_file = os.path.join(location, data_file)
     # That's all we need to check for now; we can go ahead and fix the digital trigger
-    with open(os.path.join(location, data_file)) as fid:
-        fix_digital_trigger(fid, os.path.join(temp_dir, data_file))
+    if skip_dtc:
+        processed_data_file = correct_data_file
+        message('Skipping digital trigger repair...')
+    else:
+        processed_data_file = os.path.join(temp_dir, data_file)
+        with open(correct_data_file) as fid:
+            fix_digital_trigger(fid, processed_data_file)
 else:
     if re.search('(\\.tar\\.gz)|(\\.tgz)|(\\.tar\\.bz2)|(\\.tar)$', location) == None:
         error('Location file (' + location + ') is not a tar or zipped-tar file')
@@ -363,8 +397,9 @@ else:
                          head_shape_file, sensor_positions_file])
         misses = [nm for nm in possibles if nm not in filenames];
         if len(misses) > 0:
-            error('tarball does not contain all files; missing: ' + ', '.join(misses))
-            exit(1)
+            if len(misses) == 1 and not(separate_raw_data) and not(misses[0] == data_file):
+                error('tarball does not contain all files; missing: ' + ', '.join(misses))
+                exit(1)
         # okay, we need to extract these files (but not the raw data file)
         tmpdatfl = os.path.join(dirname, data_file)
         tar.extractall(temp_dir, filter(lambda fl: fl.name != tmpdatfl, tar.getmembers()))
@@ -373,12 +408,22 @@ else:
         marker_coregistration_file = os.path.join(temp_dir, dirname, marker_coregistration_file)
         head_shape_file = os.path.join(temp_dir, dirname, head_shape_file)
         sensor_positions_file = os.path.join(temp_dir, dirname, sensor_positions_file)
+        # make sure we have the data file straight
+        if separate_raw_data and not(os.path.isfile(data_file)):
+            error('Cannot find required file: ' + file)
+            exit(1)
+        elif separate_raw_data:
+            correct_data_file = data_file
+        else:
+            correct_data_file = os.path.join(dirname, data_file)
         # then we need to fix the digital trigger channel
-        data_file_tar = tar.extractfile(os.path.join(dirname, data_file))
-        fix_digital_trigger(data_file_tar, os.path.join(temp_dir, data_file))
-
-# No matter what, if we get to this point, this is the corrected text data file
-processed_data_file = os.path.join(temp_dir, data_file)
+        processed_data_file = os.path.join(temp_dir, data_file)
+        if skip_dtc:
+            message('Skipping digital trigger repair and extracting data file...')
+            tar.extractall(temp_dir, [tmpdatfl])
+        else:
+            data_file_tar = tar.extractfile(corrected_data_file)
+            fix_digital_trigger(data_file_tar, processed_data_file)
 
 # Let's construct the command...
 mne_command = [mne_kit2fiff,
@@ -415,7 +460,7 @@ else:
         mne_out = out_stream
         mne_err = err_stream
     else:
-        mne_out = None
+        mne_out = open(os.devnull)
         mne_err = err_stream
     status = subprocess.call(mne_command, stdout=mne_out, stderr=mne_err);
     if status == 0: message('mne_kit2fiff returned successfully!')
