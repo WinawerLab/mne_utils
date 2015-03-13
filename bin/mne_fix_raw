@@ -115,7 +115,7 @@ def fix_digital_trigger(fid, outname):
     # Okay, the challenge here is to walk through this huge text file and fix the digital trigger
     # channel, line by line...
     message('Reading raw file...')
-    lines = [map(float, line.split()) for line in fid]
+    lines = numpy.array([map(float, line.split()) for line in fid])
     message('Fixing digital trigger channel...')
     trigs = numpy.array([[0]*len(lines), [0]*len(lines), [0]*len(lines), [0]*len(lines)])
     for u, i in zip(lines, range(len(lines))):
@@ -163,13 +163,15 @@ def fix_digital_trigger(fid, outname):
                 trigs[j,i] = tot
                 trigs[j,i+1] = 0
                 trigs[j,i+2] = 0
-    # convert to a base-10 representation
-    dtc = trigs[0] + 2*trigs[1] + 4*trigs[2] + 8*trigs[3]
+    # put these back in the channel; we encode them as jumps from 0 to 10
+    lines[:, 160] = trigs[0]*10;
+    lines[:, 161] = trigs[1]*10;
+    lines[:, 162] = trigs[2]*10;
+    lines[:, 163] = trigs[3]*10;
     # Now we write out the original file, replacing just column 160 with the dtc
     message('Outputting fixed raw file...')
     with open(outname, 'w') as out:
-        for line, x in zip(lines, dtc):
-            line[160] = x
+        for line in lines:
             out.write('\t'.join(map(str, line)) + '\n')
     # That's it!
     return outname
@@ -282,9 +284,9 @@ parser.add_argument('--highpass',
                     action = 'store',
                     default = '0')
 parser.add_argument('--stim',
-                    help = 'A colon separated list of channel numbers (starting from 1) comprising the virtual STI 014; this argument is passed to mne_kit2fiff; NOTE: this argument should not be changed from default lightly; if 161 is not included in this list, the digital trigger channel is not included in the output file',
+                    help = 'A colon separated list of channel numbers (starting from 1) comprising the virtual STI 014; this argument is passed to mne_kit2fiff; NOTE: this argument should not be changed from default lightly; if 161:162:...:176 are not included in this list, the digital trigger channel is not fully included in the output file',
                     action = 'store',
-                    default = '161')
+                    default = '161:162:163:164')
 parser.add_argument('--stimthresh',
                     help = 'Threshold value used when STI 014 is composed (default = 1.0); this argument is passed to mne_kit2fiff',
                     action = 'store',
@@ -334,7 +336,7 @@ chadd = args.add
 
 # We can go ahead and make a temp directory and the cleanup handler
 temp_dir = tempfile.mkdtemp(prefix = 'mne_prep_')
-#if not(no_mne): atexit.register(delete_temp_dir, path=temp_dir)
+if not(no_mne): atexit.register(delete_temp_dir, path=temp_dir)
 
 
 
